@@ -1,0 +1,107 @@
+[
+    {
+        "id": "086840c39fd2513d",
+        "type": "tab",
+        "label": "Takt Logs API (V5)",
+        "disabled": false,
+        "info": "从 PG 表 takt_logs 读取节拍数据，提供 /api/takt-logs 接口（时间为本地字符串）"
+    },
+    {
+        "id": "a741786df42508ad",
+        "type": "http in",
+        "z": "086840c39fd2513d",
+        "name": "GET /api/takt-logs",
+        "url": "/api/takt-logs",
+        "method": "get",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 150,
+        "y": 100,
+        "wires": [
+            [
+                "5d6265384e5ecfd8"
+            ]
+        ]
+    },
+    {
+        "id": "5d6265384e5ecfd8",
+        "type": "postgresql",
+        "z": "086840c39fd2513d",
+        "name": "SELECT takt_logs (local time)",
+        "query": "SELECT\n    id,\n    station_id,\n    station_name,\n    to_char(trigger_time, 'YYYY-MM-DD HH24:MI:SS') AS trigger_time,\n    to_char(prev_time,    'YYYY-MM-DD HH24:MI:SS') AS prev_time,\n    interval_seconds\nFROM takt_logs\nORDER BY trigger_time ASC\nLIMIT 500;",
+        "postgreSQLConfig": "fd39fa3e68b1cafe",
+        "split": false,
+        "rowsPerMsg": "1",
+        "outputs": 1,
+        "x": 420,
+        "y": 100,
+        "wires": [
+            [
+                "b9e3a8f9a1b2e291"
+            ]
+        ]
+    },
+    {
+        "id": "b9e3a8f9a1b2e291",
+        "type": "function",
+        "z": "086840c39fd2513d",
+        "name": "映射为前端 JSON 结构",
+        "func": "// msg.payload 是 PG 返回的行数组\nconst rows = msg.payload || [];\n\nconst data = rows.map((row, idx) => {\n    const interval = row.interval_seconds != null\n        ? Number(row.interval_seconds)\n        : null;\n\n    return {\n        // 主键\n        id: row.id != null ? row.id : (idx + 1),\n\n        // 工位信息\n        station_id: row.station_id,\n        station_name: row.station_name,\n\n        // 时间字段：现在已经是字符串 \"YYYY-MM-DD HH:MM:SS\"\n        // 前端可以直接显示，或者再做字符串切片得到 HH:MM:SS\n        current_time: row.trigger_time,\n        prev_time: row.prev_time,\n\n        // 节拍秒数\n        interval_sec: interval\n    };\n});\n\nmsg.payload = data;\n\n// 设置响应头\nmsg.headers = msg.headers || {};\nmsg.headers[\"Content-Type\"] = \"application/json; charset=utf-8\";\n// 如果前端 HTML 不在同一域名/端口下，可以先放开 CORS\nmsg.headers[\"Access-Control-Allow-Origin\"] = \"*\";\n\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 730,
+        "y": 100,
+        "wires": [
+            [
+                "a6b4e7cca4cd2ae3"
+            ]
+        ]
+    },
+    {
+        "id": "a6b4e7cca4cd2ae3",
+        "type": "http response",
+        "z": "086840c39fd2513d",
+        "name": "返回 JSON",
+        "statusCode": "",
+        "headers": {},
+        "x": 1010,
+        "y": 100,
+        "wires": []
+    },
+    {
+        "id": "fd39fa3e68b1cafe",
+        "type": "postgreSQLConfig",
+        "name": "",
+        "host": "127.0.0.1",
+        "hostFieldType": "str",
+        "port": 5432,
+        "portFieldType": "num",
+        "database": "postgres",
+        "databaseFieldType": "str",
+        "ssl": "false",
+        "sslFieldType": "bool",
+        "applicationName": "",
+        "applicationNameType": "str",
+        "max": 10,
+        "maxFieldType": "num",
+        "idle": 1000,
+        "idleFieldType": "num",
+        "connectionTimeout": 10000,
+        "connectionTimeoutFieldType": "num",
+        "user": "postgres",
+        "userFieldType": "str",
+        "password": "asdf6666",
+        "passwordFieldType": "str"
+    },
+    {
+        "id": "1e75f4c2b95c52d0",
+        "type": "global-config",
+        "env": [],
+        "modules": {
+            "node-red-contrib-postgresql": "0.15.4"
+        }
+    }
+]

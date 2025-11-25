@@ -1,0 +1,170 @@
+[
+    {
+        "id": "b52c6fb0c70a8b0e",
+        "type": "tab",
+        "label": "极简节拍采集 (V5 - 本地时间)",
+        "disabled": false,
+        "info": "【V5 极简版 - 本地时间】\n此流程完全基于您提供的参考代码构建。\n\n1. 不再有 API 接口，只负责写入数据库。\n2. 【已修改】使用 toLocalSQLString() 辅助函数来存储本地时间。\n3. 使用一个“动态” Function 节点处理所有工位。\n4. 写入 'takt_logs' 表 (需要使用 V5 - 本地时间版 的表结构)。"
+    },
+    {
+        "id": "e582a7d35a4d8811",
+        "type": "function",
+        "z": "b52c6fb0c70a8b0e",
+        "name": "计算节拍 (V5 动态逻辑)",
+        "func": "// 辅助函数：将 Date 对象转为 'YYYY-MM-DD HH:MM:SS.MS' 格式\n// 这是为了写入 PostgreSQL 的 TIMESTAMP (不带时区) 字段\nfunction toLocalSQLString(date) {\n    if (!date) return null;\n    // 1. 获取本地时间的毫秒数\n    // 2. 减去时区偏移量 (分钟 * 60000 毫秒)，得到“伪”UTC时间\n    const offset = date.getTimezoneOffset() * 60000;\n    const localDate = new Date(date.getTime() - offset);\n    // 3. 转换为ISO字符串，并格式化\n    // .toISOString() 会输出 YYYY-MM-DDTHH:MM:SS.MSZ\n    // 我们替换 T 为空格，并去掉 Z\n    return localDate.toISOString().replace('T', ' ').replace('Z', '');\n}\n\n// --- V5 核心逻辑：基于您的参考代码 (本地时间版) ---\n\n// 1. 根据传入的 stationId 获取 context 键\nconst contextKey = \"last_time_\" + msg.payload.stationId;\nconst lastTimeStr = flow.get(contextKey); // 获取上次的本地时间字符串\nconst now = new Date();\nconst now_str = toLocalSQLString(now); // 【修改】计算当前本地时间字符串\n\nlet interval = null;\nlet prevTimeStr = null;\n\n// 2. 检查是否存在“上次时间”\nif (lastTimeStr) {\n    // lastTimeStr 是我们上次存的本地时间字符串，所以要转回 Date 对象来计算\n    const lastTime = new Date(lastTimeStr);\n    const diffMs = now.getTime() - lastTime.getTime();\n    interval = parseFloat((diffMs / 1000).toFixed(3));\n    prevTimeStr = lastTimeStr; // 上次时间就是 lastTimeStr\n} else {\n    node.warn(msg.payload.stationName + \": 收到第一个信号，节拍为 null\");\n}\n\n// 3. 关键：无论如何，都用“现在”的本地时间字符串更新“上一次”的时间\nflow.set(contextKey, now_str);\n\n// 4. 准备 SQL 语句 (takt_logs)\nmsg.query = \"INSERT INTO takt_logs (station_id, station_name, trigger_time, prev_time, interval_seconds) VALUES ($1, $2, $3, $4, $5)\";\n\n// 5. 准备参数 (使用本地时间字符串)\nmsg.params = [\n    msg.payload.stationId,   // $1\n    msg.payload.stationName, // $2\n    now_str,                 // $3 (当前时间, 本地)\n    prevTimeStr,             // $4 (上次时间, 本地, 或 null)\n    interval                 // $5 (间隔, 或 null)\n];\n\nmsg.payload = {}; \nreturn msg;\n",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 480,
+        "y": 180,
+        "wires": [
+            [
+                "ef4e37341e565bc7",
+                "2b3ac91d06e90e7a"
+            ]
+        ]
+    },
+    {
+        "id": "ef4e37341e565bc7",
+        "type": "postgresql",
+        "z": "b52c6fb0c70a8b0e",
+        "name": "写入pgsql (takt_logs)",
+        "query": "",
+        "postgreSQLConfig": "fd39fa3e68b1cafe",
+        "split": false,
+        "rowsPerMsg": 1,
+        "outputs": 1,
+        "x": 730,
+        "y": 180,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "2b3ac91d06e90e7a",
+        "type": "debug",
+        "z": "b52c6fb0c70a8b0e",
+        "name": "查看生成的SQL (V5)",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 740,
+        "y": 240,
+        "wires": []
+    },
+    {
+        "id": "aa7f6fb9045d52ca",
+        "type": "inject",
+        "z": "b52c6fb0c70a8b0e",
+        "name": "【模拟】ST-01 (工序A)",
+        "props": [
+            {
+                "p": "payload",
+                "v": "{\"stationId\":\"ST-01\",\"stationName\":\"B线-工序A-开始点\"}",
+                "vt": "json"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 230,
+        "y": 120,
+        "wires": [
+            [
+                "e582a7d35a4d8811"
+            ]
+        ]
+    },
+    {
+        "id": "0da2bc04464b928b",
+        "type": "inject",
+        "z": "b52c6fb0c70a8b0e",
+        "name": "【模拟】ST-02 (工序B)",
+        "props": [
+            {
+                "p": "payload",
+                "v": "{\"stationId\":\"ST-02\",\"stationName\":\"B线-工序B-开始点\"}",
+                "vt": "json"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 230,
+        "y": 180,
+        "wires": [
+            [
+                "e582a7d35a4d8811"
+            ]
+        ]
+    },
+    {
+        "id": "0624f20918467b3d",
+        "type": "inject",
+        "z": "b52c6fb0c70a8b0e",
+        "name": "【模拟】ST-03 (工序C)",
+        "props": [
+            {
+                "p": "payload",
+                "v": "{\"stationId\":\"ST-03\",\"stationName\":\"B线-工序C-开始点\"}",
+                "vt": "json"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 230,
+        "y": 240,
+        "wires": [
+            [
+                "e582a7d35a4d8811"
+            ]
+        ]
+    },
+    {
+        "id": "fd39fa3e68b1cafe",
+        "type": "postgreSQLConfig",
+        "name": "",
+        "host": "127.0.0.1",
+        "hostFieldType": "str",
+        "port": 5432,
+        "portFieldType": "num",
+        "database": "postgres",
+        "databaseFieldType": "str",
+        "ssl": "false",
+        "sslFieldType": "bool",
+        "applicationName": "",
+        "applicationNameType": "str",
+        "max": 10,
+        "maxFieldType": "num",
+        "idle": 1000,
+        "idleFieldType": "num",
+        "connectionTimeout": 10000,
+        "connectionTimeoutFieldType": "num",
+        "user": "postgres",
+        "userFieldType": "str",
+        "password": "asdf6666",
+        "passwordFieldType": "str"
+    },
+    {
+        "id": "9885e6d4740f172e",
+        "type": "global-config",
+        "env": [],
+        "modules": {
+            "node-red-contrib-postgresql": "0.15.4"
+        }
+    }
+]
