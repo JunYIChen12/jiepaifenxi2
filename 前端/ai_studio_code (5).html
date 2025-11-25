@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>产线节拍脉搏记录仪 - 自动刷新版</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.staticfile.net/vue/3.3.4/vue.global.prod.min.js"></script>
+    <!-- 引入 ECharts -->
+    <script src="https://cdn.staticfile.net/echarts/5.4.3/echarts.min.js"></script>
+    <script src="https://cdn.staticfile.net/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        body { background-color: #f8fafc; font-family: 'Inter', 'Microsoft YaHei', sans-serif; }
+        .glass-panel { background: rgba(255, 255, 255, 1); border: 1px solid #e2e8f0; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); }
+        [v-cloak] { display: none; }
+        /* 闪烁动画，用于指示数据更新 */
+        .pulse-dot { animation: pulse-green 2s infinite; }
+        @keyframes pulse-green {
+            0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7); }
+            70% { box-shadow: 0 0 0 6px rgba(34, 197, 94, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
+        }
+    </style>
+</head>
+<body>
+
+<div id="app" v-cloak class="min-h-screen flex flex-col">
+
+    <!-- 顶部导航栏 -->
+    <header class="bg-white border-b border-gray-200 sticky top-0 z-20">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex items-center gap-3">
+                    <div class="bg-blue-600 p-2 rounded-lg text-white shadow-md">
+                        <i data-lucide="activity" class="w-6 h-6"></i>
+                    </div>
+                    <div>
+                        <h1 class="text-xl font-bold text-gray-900 tracking-tight">B线节拍记录仪</h1>
+                        <div class="flex items-center gap-2">
+                            <span class="flex h-2 w-2 relative">
+                                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                                <span class="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                            </span>
+                            <p class="text-xs text-green-600 font-medium">
+                                系统状态: 实时监控中 (2s/次)
+                            </p>
+                        </div>
+                    </div>
+                </div>
+                <div class="flex items-center gap-3">
+                    <nav class="flex bg-gray-100 p-1 rounded-lg mr-4">
+                        <button @click="currentView = 'monitor'" 
+                            :class="[currentView === 'monitor' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500', 'px-4 py-1.5 text-sm font-medium rounded-md transition-all']">
+                            🖥️ 实时看板
+                        </button>
+                        <button @click="currentView = 'report'" 
+                            :class="[currentView === 'report' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500', 'px-4 py-1.5 text-sm font-medium rounded-md transition-all']">
+                            📋 数据审计
+                        </button>
+                    </nav>
+                    
+                    <div class="text-xs text-gray-400 tabular-nums">
+                        上次更新: {{ lastUpdateTime || '...' }}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- 错误提示 -->
+    <div v-if="errorMsg" class="bg-red-50 border-l-4 border-red-500 p-4 mx-auto max-w-7xl mt-4 transition-all">
+        <div class="flex">
+            <i data-lucide="alert-triangle" class="h-5 w-5 text-red-400 mr-3"></i>
+            <p class="text-sm text-red-700">{{ errorMsg }}</p>
+        </div>
+    </div>
+
+    <!-- 主内容区 -->
+    <main class="flex-1 max-w-7xl w-full mx-auto p-6">
+        
+        <!-- === 视图 1: 实时看板 === -->
+        <div v-show="currentView === 'monitor'" class="space-y-6">
+            <div v-if="stations.length === 0" class="text-center py-12 text-gray-400">
+                <i data-lucide="loader" class="w-8 h-8 mx-auto animate-spin mb-2"></i>
+                <p>正在等待数据接入...</p>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <div v-for="(station, index) in stations" :key="station.id" 
+                     class="glass-panel rounded-xl p-5 border-t-4 transition-all duration-500"
+                     :class="getBorderColor(station.lastInterval)">
+                    
+                    <div class="flex justify-between items-start mb-4">
+                        <div>
+                            <h3 class="font-bold text-gray-800 text-lg truncate pr-2" :title="station.name">{{ station.name }}</h3>
+                            <span class="text-xs text-gray-400 font-mono">ID: {{ station.id }}</span>
+                        </div>
+                        <div class="h-3 w-3 rounded-full transition-all duration-200"
+                             :class="[station.lastInterval ? 'bg-green-500 pulse-dot' : 'bg-slate-200']">
+                        </div>
+                    </div>
+
+                    <div class="flex items-baseline gap-2 mb-4">
+                        <span class="text-5xl font-bold font-mono tracking-tighter" :class="getTextColor(station.lastInterval)">
+                            {{ station.lastInterval ? station.lastInterval.toFixed(1) : '--' }}
+                        </span>
+                        <span class="text-sm text-gray-500 font-medium">秒/件</span>
+                    </div>
+
+                    <!-- 小趋势图 -->
+                    <div class="h-16 w-full bg-slate-50 rounded-lg border border-slate-100 overflow-hidden relative mb-3">
+                        <div :id="'sparkline-' + index" class="w-full h-full"></div>
+                    </div>
+
+                    <div class="flex justify-between text-xs text-gray-500 pt-3 border-t border-gray-100">
+                        <div class="font-mono">{{ formatTimeOnly(station.lastTimeStr) }}</div>
+                        <div>累计: <span class="font-mono font-bold text-gray-700">{{ station.recordCount }}</span></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- === 视图 2: 数据报表 === -->
+        <div v-show="currentView === 'report'" class="h-[calc(100vh-9rem)] flex flex-col lg:flex-row gap-6">
+            
+            <!-- 左侧表格 -->
+            <div class="lg:w-1/2 flex flex-col glass-panel rounded-xl overflow-hidden bg-white">
+                <div class="px-5 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
+                    <h3 class="font-bold text-gray-700 flex items-center gap-2">
+                        <i data-lucide="table" class="w-4 h-4 text-blue-500"></i> 实时记录流
+                    </h3>
+                    <button @click="exportExcel" class="text-xs bg-white border border-gray-300 px-3 py-1.5 rounded hover:bg-gray-50 transition flex items-center gap-1">
+                        <i data-lucide="download" class="w-3 h-3"></i> 导出
+                    </button>
+                </div>
+                
+                <div class="flex-1 overflow-auto scrollbar-thin relative">
+                    <table class="w-full text-sm text-left">
+                        <thead class="text-xs text-gray-500 uppercase bg-gray-50 sticky top-0 z-10 shadow-sm">
+                            <tr>
+                                <th class="px-4 py-3">工位</th>
+                                <th class="px-4 py-3">触发时间</th>
+                                <th class="px-4 py-3 text-right">节拍(秒)</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-100 bg-white">
+                            <tr v-for="row in logs" :key="row.uniqueKey" class="hover:bg-blue-50/50 transition-colors">
+                                <td class="px-4 py-2 font-medium text-gray-700 truncate max-w-[120px]" :title="row.point">{{ row.point }}</td>
+                                <td class="px-4 py-2 text-gray-500 tabular-nums text-xs">{{ row.current }}</td>
+                                <td class="px-4 py-2 text-right font-bold tabular-nums font-mono" :class="getTextColor(row.rawInterval)">
+                                    {{ row.interval }}
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 右侧大图 -->
+            <div class="lg:w-1/2 flex flex-col gap-6">
+                <div class="glass-panel rounded-xl flex flex-col flex-1 overflow-hidden bg-white">
+                    <div class="px-5 py-4 border-b border-gray-100 bg-gray-50/50 flex justify-between items-center z-10">
+                        <h3 class="font-bold text-gray-700 flex items-center gap-2">
+                            <i data-lucide="trending-up" class="w-4 h-4 text-blue-500"></i> 稳定性趋势
+                        </h3>
+                        <select v-model="selectedChartStation" class="text-sm border-gray-300 border rounded px-2 py-1 bg-white outline-none">
+                            <option value="all">⚡ 所有工位</option>
+                            <option v-for="s in stations" :value="s.name">📍 {{ s.name }}</option>
+                        </select>
+                    </div>
+                    <div class="flex-1 w-full min-h-[300px] p-2 bg-white relative">
+                        <div id="main-chart" class="w-full h-full"></div>
+                    </div>
+                </div>
+                
+                <!-- 统计 -->
+                <div class="glass-panel rounded-xl p-5 bg-white">
+                     <div class="grid grid-cols-3 gap-4 text-center">
+                        <div>
+                            <div class="text-xs text-gray-400 uppercase mb-1">平均</div>
+                            <div class="text-xl font-bold text-blue-600 font-mono">{{ chartStats.avg }}</div>
+                        </div>
+                        <div>
+                            <div class="text-xs text-gray-400 uppercase mb-1">最快</div>
+                            <div class="text-xl font-bold text-emerald-600 font-mono">{{ chartStats.min }}</div>
+                        </div>
+                        <div>
+                            <div class="text-xs text-gray-400 uppercase mb-1">最慢</div>
+                            <div class="text-xl font-bold text-rose-600 font-mono">{{ chartStats.max }}</div>
+                        </div>
+                     </div>
+                </div>
+            </div>
+        </div>
+
+    </main>
+</div>
+
+<script>
+    const { createApp, ref, computed, onMounted, onUnmounted, watch, nextTick } = Vue;
+
+    createApp({
+        setup() {
+            // === 配置 ===
+            const API_URL = 'http://127.0.0.1:1880/api/takt-logs'; // 请确保后端地址正确
+            const REFRESH_RATE = 2000; // 2秒刷新一次
+            const TARGET_TIME = 10.0; 
+            
+            // === 状态 ===
+            const currentView = ref('monitor'); 
+            const selectedChartStation = ref('all');
+            const errorMsg = ref('');
+            const lastUpdateTime = ref('');
+            
+            const stations = ref([]); // 动态生成
+            const logs = ref([]);     // 原始日志
+            
+            let timer = null;
+            let mainChart = null;
+            let sparklines = [];
+
+            // === 核心数据逻辑 ===
+            const fetchData = async () => {
+                try {
+                    const response = await fetch(API_URL);
+                    if (!response.ok) throw new Error('API 响应异常');
+                    const data = await response.json();
+                    
+                    processData(data);
+                    errorMsg.value = ''; // 清除错误
+                    lastUpdateTime.value = new Date().toLocaleTimeString();
+                    
+                    // 刷新图表
+                    nextTick(() => {
+                        updateSparklines();
+                        if (currentView.value === 'report') updateMainChart();
+                    });
+
+                } catch (err) {
+                    console.error("Fetch error:", err);
+                    errorMsg.value = `数据连接中断: ${err.message} (正在尝试重连...)`;
+                }
+            };
+
+            const processData = (rawData) => {
+                // 1. 提取所有不重复的工位名称
+                const uniqueStations = {};
+                
+                // 2. 处理日志
+                // 假设 rawData 已经包含了 station_name, current_time, interval_sec
+                // 为了避免 key 冲突，我们给每条 log 一个临时 key
+                const processedLogs = rawData.map((item, idx) => {
+                    // 收集工位信息
+                    const sName = item.station_name || item.station_id || '未知工位';
+                    const sId = item.station_id || ('S-' + idx);
+                    
+                    if (!uniqueStations[sName]) {
+                        uniqueStations[sName] = {
+                            id: sId,
+                            name: sName,
+                            lastTimeStr: null,
+                            lastInterval: null,
+                            recordCount: 0,
+                            history: []
+                        };
+                    }
+                    
+                    // 统计
+                    uniqueStations[sName].recordCount++;
+                    if (item.interval_sec !== null) {
+                        uniqueStations[sName].history.push(Number(item.interval_sec));
+                    }
+
+                    // 记录最新状态 (假设数据可能不是严格排序，比较一下时间)
+                    // 如果 API 保证是按时间倒序/正序，可以直接取
+                    // 这里简单处理：取遍历到的最后一个有效值作为“最新”
+                    uniqueStations[sName].lastTimeStr = item.current_time;
+                    uniqueStations[sName].lastInterval = item.interval_sec ? Number(item.interval_sec) : null;
+
+                    return {
+                        uniqueKey: item.id || idx,
+                        point: sName,
+                        current: item.current_time,
+                        interval: item.interval_sec ? Number(item.interval_sec).toFixed(1) : '--',
+                        rawInterval: item.interval_sec ? Number(item.interval_sec) : 0,
+                        timestamp: new Date(item.current_time).getTime() // 用于图表时间轴
+                    };
+                });
+
+                // 3. 更新 Vue 状态
+                // 表格：按时间倒序 (最新的在上面)
+                logs.value = processedLogs.sort((a, b) => b.timestamp - a.timestamp);
+                
+                // 工位列表：转为数组
+                const stationList = Object.values(uniqueStations);
+                // 保持 Sparkline 数组长度适中
+                stationList.forEach(s => {
+                    if(s.history.length > 20) s.history = s.history.slice(-20);
+                });
+                
+                // 如果工位数量变化，可能需要重置 sparklines 实例
+                if (stationList.length !== stations.value.length) {
+                    stations.value = stationList;
+                    nextTick(initSparklines);
+                } else {
+                    stations.value = stationList;
+                }
+            };
+
+            // === ECharts 图表逻辑 (关键修复) ===
+
+            const updateMainChart = () => {
+                const dom = document.getElementById('main-chart');
+                if (!dom) return;
+                if (!mainChart) mainChart = echarts.init(dom);
+
+                // 准备 Series 数据
+                const seriesData = [];
+                const legendData = [];
+                
+                // 找出要显示的工位
+                const targetStations = selectedChartStation.value === 'all' 
+                    ? stations.value 
+                    : stations.value.filter(s => s.name === selectedChartStation.value);
+
+                targetStations.forEach(station => {
+                    // 从 logs 里筛选该工位的所有数据
+                    // 数据格式必须是: [ [timestamp, value], [timestamp, value] ]
+                    // 这样 ECharts Time Axis 才能正确对齐不同工位的时间点
+                    const stationLogs = logs.value
+                        .filter(l => l.point === station.name && l.rawInterval > 0)
+                        .sort((a, b) => a.timestamp - b.timestamp); // 必须按时间正序
+
+                    const dataPoints = stationLogs.map(l => [l.current, l.rawInterval]);
+
+                    if (dataPoints.length > 0) {
+                        legendData.push(station.name);
+                        seriesData.push({
+                            name: station.name,
+                            type: 'line',
+                            symbol: 'circle',
+                            symbolSize: 6,
+                            smooth: true,
+                            connectNulls: false, // 时间轴如果不连续，是否连接？通常 false 更真实
+                            data: dataPoints,
+                            markLine: selectedChartStation.value !== 'all' ? {
+                                data: [{ yAxis: TARGET_TIME, label: { formatter: '目标' } }]
+                            } : undefined
+                        });
+                    }
+                });
+
+                const option = {
+                    tooltip: { 
+                        trigger: 'axis',
+                        axisPointer: { type: 'cross' }
+                    },
+                    legend: { bottom: 0, data: legendData },
+                    grid: { top: 30, bottom: 60, left: 50, right: 30 },
+                    xAxis: { 
+                        type: 'time', // <--- 关键修改：使用时间轴
+                        axisLabel: { formatter: '{HH}:{mm}:{ss}' },
+                        splitLine: { show: false }
+                    },
+                    yAxis: { 
+                        type: 'value', 
+                        name: '秒 (s)',
+                        min: 0, // 节拍不会小于0
+                        splitLine: { lineStyle: { type: 'dashed' } }
+                    },
+                    series: seriesData
+                };
+
+                mainChart.setOption(option, { notMerge: true }); // notMerge 确保旧数据被清除
+            };
+
+            const initSparklines = () => {
+                // 清理旧实例
+                sparklines.forEach(i => i && i.dispose());
+                sparklines = [];
+                
+                stations.value.forEach((s, i) => {
+                    const dom = document.getElementById('sparkline-' + i);
+                    if(dom) {
+                        const chart = echarts.init(dom);
+                        sparklines[i] = chart;
+                        chart.setOption({
+                            grid: { top: 2, bottom: 2, left: 0, right: 0 },
+                            xAxis: { type: 'category', show: false },
+                            yAxis: { type: 'value', show: false, min: 0 },
+                            series: [{
+                                type: 'line', 
+                                data: [], 
+                                smooth: true, 
+                                showSymbol: false,
+                                areaStyle: { opacity: 0.2, color: '#3b82f6' },
+                                lineStyle: { color: '#3b82f6', width: 1.5 }
+                            }]
+                        });
+                    }
+                });
+                updateSparklines();
+            };
+
+            const updateSparklines = () => {
+                stations.value.forEach((s, i) => {
+                    if(sparklines[i]) {
+                        sparklines[i].setOption({ series: [{ data: s.history }] });
+                        sparklines[i].resize();
+                    }
+                });
+            };
+
+            // === 辅助 ===
+            const getBorderColor = (val) => !val ? 'border-gray-200' : (val > TARGET_TIME * 1.2 ? 'border-red-400' : 'border-green-500');
+            const getTextColor = (val) => {
+                if (!val) return 'text-gray-300';
+                return val > TARGET_TIME * 1.2 ? 'text-red-600' : 'text-gray-800';
+            };
+            const formatTimeOnly = (str) => str ? str.split(' ')[1] : '--:--';
+            
+            const exportExcel = () => {
+                const ws = XLSX.utils.json_to_sheet(logs.value);
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, "Log");
+                XLSX.writeFile(wb, `Data_${Date.now()}.xlsx`);
+            };
+
+            const chartStats = computed(() => {
+                const target = selectedChartStation.value;
+                const validData = logs.value
+                    .filter(r => r.rawInterval > 0 && (target === 'all' || r.point === target))
+                    .map(r => r.rawInterval);
+                if(validData.length === 0) return { avg: '-', min: '-', max: '-' };
+                
+                const sum = validData.reduce((a,b)=>a+b,0);
+                return {
+                    avg: (sum / validData.length).toFixed(1) + 's',
+                    min: Math.min(...validData).toFixed(1) + 's',
+                    max: Math.max(...validData).toFixed(1) + 's'
+                };
+            });
+
+            // === 生命周期 ===
+            onMounted(() => {
+                lucide.createIcons();
+                fetchData(); // 立即执行一次
+                timer = setInterval(fetchData, REFRESH_RATE); // 开启自动刷新
+                
+                window.addEventListener('resize', () => {
+                    mainChart && mainChart.resize();
+                    sparklines.forEach(c => c && c.resize());
+                });
+            });
+
+            onUnmounted(() => {
+                if(timer) clearInterval(timer);
+            });
+
+            watch(currentView, (val) => {
+                if(val === 'report') nextTick(updateMainChart);
+            });
+            watch(selectedChartStation, updateMainChart);
+
+            return {
+                currentView, stations, logs, selectedChartStation, chartStats, errorMsg, lastUpdateTime,
+                getBorderColor, getTextColor, formatTimeOnly, exportExcel
+            };
+        }
+    }).mount('#app');
+</script>
+</body>
+</html>
