@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>B线节拍决策看板 - 视觉增强版</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.staticfile.net/vue/3.3.4/vue.global.prod.min.js"></script>
+    <script src="https://cdn.staticfile.net/echarts/5.4.3/echarts.min.js"></script>
+    <script src="https://cdn.staticfile.net/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        body { background-color: #f8fafc; font-family: 'Inter', sans-serif; }
+        .glass-panel { background: #fff; border: 1px solid #e2e8f0; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
+        [v-cloak] { display: none; }
+    </style>
+</head>
+<body>
+
+<div id="app" v-cloak class="min-h-screen flex flex-col">
+
+    <!-- 顶栏 -->
+    <header class="bg-white border-b border-gray-200 sticky top-0 z-30 px-6 h-16 flex justify-between items-center shadow-sm">
+        <div class="flex items-center gap-3">
+            <div class="bg-indigo-600 p-2 rounded text-white"><i data-lucide="bar-chart-2" class="w-5 h-5"></i></div>
+            <div>
+                <h1 class="text-lg font-bold text-gray-900">B线节拍决策看板</h1>
+                <div class="text-xs text-gray-500">Target Time (TT): <span class="font-bold text-indigo-600">{{ targetTime }}s</span></div>
+            </div>
+        </div>
+        
+        <div class="flex items-center gap-4">
+            <!-- 危险操作区 -->
+            <button @click="resetSystem" class="flex items-center gap-1 px-3 py-1.5 text-xs font-bold text-red-600 bg-red-50 hover:bg-red-100 border border-red-200 rounded transition-colors" title="清除所有历史数据">
+                <i data-lucide="trash-2" class="w-3 h-3"></i> 重置系统
+            </button>
+            <div class="h-6 w-px bg-gray-300 mx-2"></div>
+            
+            <nav class="flex bg-gray-100 p-1 rounded">
+                <button @click="currentView='monitor'" :class="[currentView==='monitor'?'bg-white text-indigo-600 shadow-sm font-bold':'text-gray-500']" class="px-4 py-1.5 text-xs rounded transition-all">实时监控</button>
+                <button @click="currentView='report'" :class="[currentView==='report'?'bg-white text-indigo-600 shadow-sm font-bold':'text-gray-500']" class="px-4 py-1.5 text-xs rounded transition-all">数据审计</button>
+            </nav>
+        </div>
+    </header>
+
+    <main class="flex-1 max-w-[1600px] w-full mx-auto p-6">
+        
+        <!-- === 视图: 实时监控 (Chart First 设计) === -->
+        <div v-show="currentView === 'monitor'">
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <div v-for="(station, index) in stations" :key="station.id" 
+                     class="glass-panel rounded-xl overflow-hidden transition-all duration-300 hover:shadow-lg flex flex-col h-[280px]">
+                    
+                    <!-- 1. 头部信息 -->
+                    <div class="px-5 pt-4 flex justify-between items-start">
+                        <div>
+                            <h3 class="font-bold text-gray-800 text-lg">{{ station.name }}</h3>
+                            <div class="text-xs text-gray-400 font-mono mt-0.5">{{ station.id }}</div>
+                        </div>
+                        <!-- 状态徽章 -->
+                        <div v-if="station.lastEventInterval !== null" 
+                             class="px-2 py-1 rounded text-xs font-bold"
+                             :class="station.statusIdx === 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'">
+                             {{ station.statusIdx === 0 ? '达标' : '超时' }}
+                        </div>
+                        <div v-else class="px-2 py-1 rounded text-xs font-bold bg-gray-100 text-gray-500">已停机</div>
+                    </div>
+
+                    <!-- 2. 核心数据 (大字 + 后端计算的偏差) -->
+                    <div class="px-5 mt-2 flex items-baseline gap-3">
+                        <template v-if="station.lastEventInterval !== null">
+                            <span class="text-5xl font-black font-mono tracking-tighter text-gray-900">
+                                {{ station.lastEventInterval.toFixed(1) }}
+                            </span>
+                            <div class="flex flex-col">
+                                <!-- 直接显示后端算好的 diffText -->
+                                <span class="text-sm font-bold px-1.5 rounded"
+                                      :class="station.statusIdx === 0 ? 'text-green-600 bg-green-50' : 'text-red-600 bg-red-50'">
+                                    {{ station.diffText }}
+                                </span>
+                                <span class="text-[10px] text-gray-400 uppercase font-medium mt-0.5">Seconds</span>
+                            </div>
+                        </template>
+                        <template v-else>
+                            <span class="text-3xl font-bold text-gray-300">WAITING...</span>
+                        </template>
+                    </div>
+
+                    <!-- 3. 增强版图表 (占据剩余空间) -->
+                    <div class="flex-1 w-full relative mt-2">
+                        <!-- 这里的 div 撑满剩余高度 -->
+                        <div :id="'sparkline-' + index" class="w-full h-full absolute inset-0"></div>
+                    </div>
+                    
+                    <!-- 4. 底部微弱信息 -->
+                    <div class="px-4 py-2 bg-gray-50 border-t border-gray-100 flex justify-between text-[10px] text-gray-400">
+                        <span>最后更新: {{ formatTimeOnly(station.lastEventTime) }}</span>
+                        <span>累计: {{ station.recordCount }}</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- === 视图: 数据审计 (使用后端数据) === -->
+        <div v-show="currentView === 'report'" class="flex flex-col lg:flex-row gap-6 h-[calc(100vh-8rem)]">
+            <!-- 左侧表格 -->
+            <div class="lg:w-3/5 glass-panel rounded-xl flex flex-col bg-white">
+                <div class="px-4 py-3 border-b flex justify-between items-center bg-gray-50">
+                    <h3 class="font-bold text-gray-700 text-sm">流水日志</h3>
+                    <button @click="exportExcel" class="text-xs bg-white border px-3 py-1 rounded shadow-sm hover:bg-gray-100">导出Excel</button>
+                </div>
+                <div class="flex-1 overflow-auto">
+                    <table class="w-full text-sm text-left">
+                        <thead class="text-xs text-gray-500 uppercase bg-gray-50 sticky top-0 z-10">
+                            <tr><th>工位</th><th>时间</th><th class="text-right">节拍</th><th class="text-right">偏差</th></tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-100">
+                            <tr v-for="row in logs" :key="row.uniqueKey" class="hover:bg-gray-50">
+                                <td class="px-4 py-2">{{ row.point }}</td>
+                                <td class="px-4 py-2 text-gray-400 text-xs font-mono">{{ row.current }}</td>
+                                <td class="px-4 py-2 text-right font-mono font-bold">{{ row.interval }}</td>
+                                <!-- 使用后端返回的 diffStr -->
+                                <td class="px-4 py-2 text-right font-mono text-xs" 
+                                    :class="parseFloat(row.diffStr) > 0 ? 'text-red-500' : 'text-green-500'">
+                                    {{ parseFloat(row.diffStr) > 0 ? '+' : '' }}{{ row.diffStr }}s
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <!-- 右侧统计 -->
+            <div class="lg:w-2/5 flex flex-col gap-6">
+                <!-- 统计卡 -->
+                <div class="glass-panel rounded-xl p-5">
+                    <select v-model="selectedChartStation" class="w-full mb-4 text-sm border p-1 rounded">
+                        <option value="all">全线综合</option>
+                        <option v-for="s in stations" :value="s.name">{{ s.name }}</option>
+                    </select>
+                    <div class="grid grid-cols-3 gap-2 text-center">
+                         <div class="p-3 bg-blue-50 rounded">
+                             <div class="text-xs text-blue-500 mb-1">平均</div>
+                             <div class="text-xl font-bold text-blue-700">{{ currentStats.avg }}</div>
+                         </div>
+                         <div class="p-3 bg-green-50 rounded">
+                             <div class="text-xs text-green-500 mb-1">最快</div>
+                             <div class="text-xl font-bold text-green-700">{{ currentStats.min }}</div>
+                         </div>
+                         <div class="p-3 bg-red-50 rounded">
+                             <div class="text-xs text-red-500 mb-1">最慢</div>
+                             <div class="text-xl font-bold text-red-700">{{ currentStats.max }}</div>
+                         </div>
+                    </div>
+                </div>
+                <!-- 大图表 -->
+                <div class="glass-panel rounded-xl flex-1 relative bg-white overflow-hidden">
+                    <div id="main-chart" class="absolute inset-0 w-full h-full"></div>
+                </div>
+            </div>
+        </div>
+
+    </main>
+</div>
+
+<script>
+    const { createApp, ref, computed, onMounted, onUnmounted, nextTick, watch } = Vue;
+
+    createApp({
+        setup() {
+            const API_BASE = 'http://127.0.0.1:1880/api';
+            
+            const currentView = ref('monitor');
+            const stations = ref([]);
+            const logs = ref([]);
+            const stats = ref({});
+            const targetTime = ref(10.0);
+            const selectedChartStation = ref('all');
+            
+            let timer = null;
+            let sparklines = [];
+            let mainChart = null;
+
+            // === 核心逻辑：数据获取 ===
+            const fetchData = async () => {
+                try {
+                    const res = await fetch(`${API_BASE}/takt-logs`);
+                    if(!res.ok) return;
+                    const data = await res.json();
+                    
+                    stations.value = data.stations || [];
+                    logs.value = data.logs || [];
+                    stats.value = data.stats || {};
+                    targetTime.value = data.target_time || 10.0;
+                    
+                    nextTick(updateCharts);
+                } catch(e) { console.error(e); }
+            };
+
+            // === 核心功能：一键重置 ===
+            const resetSystem = async () => {
+                if(!confirm("⚠️ 确定要清空所有数据并重置系统状态吗？此操作不可撤销！")) return;
+                try {
+                    await fetch(`${API_BASE}/reset`, { method: 'POST' });
+                    // 立即刷新清空前端
+                    stations.value = [];
+                    logs.value = [];
+                    alert("系统已重置");
+                    fetchData();
+                } catch(e) { alert("重置失败"); }
+            };
+
+            // === 核心逻辑：图表渲染 (Visual Map) ===
+            const updateCharts = () => {
+                // 1. 初始化 Sparklines 实例
+                if (sparklines.length !== stations.value.length) {
+                    sparklines.forEach(c => c && c.dispose());
+                    sparklines = [];
+                    stations.value.forEach((s, i) => {
+                        const dom = document.getElementById('sparkline-' + i);
+                        if(dom) sparklines[i] = echarts.init(dom);
+                    });
+                }
+
+                // 2. 绘制每个工位的 Sparkline
+                stations.value.forEach((s, i) => {
+                    if(!sparklines[i]) return;
+                    
+                    const history = s.history || [];
+                    const maxVal = Math.max(...history, targetTime.value * 1.5);
+
+                    const option = {
+                        animation: false, // 关闭动画提升性能
+                        grid: { left: 0, right: 0, top: 10, bottom: 0 },
+                        xAxis: { show: false, type: 'category', data: history.map((_,idx)=>idx) },
+                        yAxis: { show: false, type: 'value', min: 0, max: maxVal },
+                        visualMap: {
+                            show: false,
+                            pieces: [
+                                { gt: 0, lte: targetTime.value, color: '#10b981' }, // 绿色 (<=10s)
+                                { gt: targetTime.value, color: '#ef4444' }          // 红色 (>10s)
+                            ],
+                            outOfRange: { color: '#ef4444' }
+                        },
+                        series: [{
+                            type: 'line',
+                            data: history,
+                            smooth: true,
+                            symbol: 'none',
+                            lineStyle: { width: 3 },
+                            // 面积渐变
+                            areaStyle: {
+                                opacity: 0.2
+                            },
+                            // 标线：目标时间
+                            markLine: {
+                                symbol: 'none',
+                                label: { show: false },
+                                lineStyle: { type: 'dashed', color: '#94a3b8', width: 1 },
+                                data: [{ yAxis: targetTime.value }]
+                            }
+                        }]
+                    };
+                    sparklines[i].setOption(option);
+                });
+
+                // 3. 绘制报表大图 (省略部分细节，保持基本渲染)
+                if(currentView.value === 'report') {
+                   // ... (主图逻辑与之前类似，此处省略以聚焦重点)
+                   // 如果需要我也可以把主图的完整逻辑放上来，但核心的 Sparkline 已经解决
+                   renderMainChart();
+                }
+            };
+            
+            const renderMainChart = () => {
+                const dom = document.getElementById('main-chart');
+                if(!dom) return;
+                if(!mainChart) mainChart = echarts.init(dom);
+                
+                const target = selectedChartStation.value;
+                const filteredStations = target === 'all' ? stations.value : stations.value.filter(s=>s.name === target);
+                const series = filteredStations.map(s => ({
+                    name: s.name, type: 'line', 
+                    data: logs.value.filter(l=>l.point === s.name && l.rawInterval).map(l=>[l.current, l.rawInterval]).reverse()
+                }));
+                
+                mainChart.setOption({
+                    tooltip: { trigger: 'axis' },
+                    xAxis: { type: 'time' }, yAxis: { type: 'value' },
+                    series: series
+                }, { notMerge: true });
+            };
+
+            const currentStats = computed(() => stats.value[selectedChartStation.value] || { avg:'-', min:'-', max:'-' });
+            const formatTimeOnly = (t) => t ? t.split(' ')[1] : '--:--';
+            const exportExcel = () => {
+                const ws = XLSX.utils.json_to_sheet(logs.value);
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, "Data");
+                XLSX.writeFile(wb, "Report.xlsx");
+            };
+
+            onMounted(() => {
+                lucide.createIcons();
+                fetchData();
+                timer = setInterval(fetchData, 2000);
+                window.addEventListener('resize', () => sparklines.forEach(c => c && c.resize()));
+            });
+            onUnmounted(() => clearInterval(timer));
+            watch(currentView, () => nextTick(updateCharts));
+
+            return {
+                currentView, stations, logs, currentStats, selectedChartStation, targetTime,
+                resetSystem, formatTimeOnly, exportExcel
+            };
+        }
+    }).mount('#app');
+</script>
+</body>
+</html>
